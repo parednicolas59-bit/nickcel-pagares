@@ -157,6 +157,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#f0f2f5;color:#1a
 <div class="main-nav" id="main-nav">
   <button class="active" onclick="showScreen('pagare',this)">Nuevo Pagaré</button>
   <button onclick="showScreen('cartera',this)">Cartera de Clientes</button>
+  <button onclick="showScreen('alertas',this)">🔔 Alertas WhatsApp</button>
   <div style="margin-left:auto;display:flex;align-items:center;padding-right:14px;gap:10px">
     <span id="rol-indicator" style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;background:rgba(255,255,255,.15);color:#fff"></span>
     <button onclick="doLogout()" style="padding:5px 12px;border:1px solid rgba(255,255,255,.3);border-radius:6px;background:transparent;color:rgba(255,255,255,.8);font-size:11px;cursor:pointer;font-family:inherit">Salir</button>
@@ -323,6 +324,27 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#f0f2f5;color:#1a
 </div><!-- /app -->
 </div><!-- /screen-pagare -->
 
+<!-- SCREEN: ALERTAS WHATSAPP -->
+<div id="screen-alertas" class="screen">
+  <div style="max-width:900px;margin:0 auto">
+    <div style="background:#1e3a5f;border-radius:12px;padding:18px 22px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:18px;font-weight:700;color:#fff">🔔 Alertas de cobro &mdash; WhatsApp</div>
+        <div style="font-size:12px;color:rgba(255,255,255,.6);margin-top:3px">Clientes con cuotas próximas a vencer o en mora</div>
+      </div>
+      <button onclick="renderAlertas()" style="padding:8px 16px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:8px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">↺ Actualizar</button>
+    </div>
+    <div style="font-size:13px;font-weight:700;color:#c00;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;padding-left:4px">📅 Vencen HOY</div>
+    <div id="alertas-hoy" style="margin-bottom:20px"><div style="color:#999;font-size:13px;padding:10px">Cargando...</div></div>
+    <div style="font-size:13px;font-weight:700;color:#b06000;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;padding-left:4px">📅 Vencen MAÑANA</div>
+    <div id="alertas-manana" style="margin-bottom:20px"><div style="color:#999;font-size:13px;padding:10px">Cargando...</div></div>
+    <div style="font-size:13px;font-weight:700;color:#2e75b6;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;padding-left:4px">📅 Vencen en 2 días</div>
+    <div id="alertas-pasado" style="margin-bottom:20px"><div style="color:#999;font-size:13px;padding:10px">Cargando...</div></div>
+    <div style="font-size:13px;font-weight:700;color:#7b0000;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;padding-left:4px">⚠️ EN MORA</div>
+    <div id="alertas-mora" style="margin-bottom:20px"><div style="color:#999;font-size:13px;padding:10px">Cargando...</div></div>
+  </div>
+</div>
+
 <!-- SCREEN: CARTERA -->
 <div id="screen-cartera" class="screen">
   <div class="search-box">
@@ -377,6 +399,90 @@ window.showScreen = function(s, btn){
   document.getElementById('screen-'+s).classList.add('active');
   btn.classList.add('active');
   if(s==='cartera') cargarYRenderCartera('todos');
+  if(s==='alertas') cargarYRenderAlertas();
+}
+
+// =========================================================
+// ALERTAS WHATSAPP
+// =========================================================
+async function cargarYRenderAlertas(){
+  ['hoy','manana','pasado','mora'].forEach(k=>{
+    const el=document.getElementById('alertas-'+k);
+    if(el) el.innerHTML='<div style="color:#999;font-size:13px;padding:10px">Cargando...</div>';
+  });
+  if(!carteraCache.length){ await cargarCartera(); }
+  renderAlertas();
+}
+
+window.renderAlertas = function(){
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const man = new Date(hoy); man.setDate(man.getDate()+1);
+  const pas = new Date(hoy); pas.setDate(pas.getDate()+2);
+  const isSame = (a,b)=>a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate();
+  const g = {hoy:[], manana:[], pasado:[], mora:[]};
+
+  carteraCache.forEach(c=>{
+    if(estadoCredito(c)==='pagado') return;
+    c.cuotas.forEach(q=>{
+      if(q.pagada) return;
+      const fv = new Date(q.fechaISO);
+      if(fv < hoy){
+        if(!g.mora.find(x=>x.ncredito===c.ncredito)){
+          const cv=c.cuotas.filter(x=>!x.pagada&&new Date(x.fechaISO)<hoy);
+          g.mora.push({...c,_cv:cv.length,_mv:cv.reduce((s,x)=>s+x.monto,0),_dias:diasMora(c)});
+        }
+      } else if(isSame(fv,hoy)){
+        if(!g.hoy.find(x=>x.ncredito===c.ncredito)) g.hoy.push({...c,_q:q});
+      } else if(isSame(fv,man)){
+        if(!g.manana.find(x=>x.ncredito===c.ncredito)) g.manana.push({...c,_q:q});
+      } else if(isSame(fv,pas)){
+        if(!g.pasado.find(x=>x.ncredito===c.ncredito)) g.pasado.push({...c,_q:q});
+      }
+    });
+  });
+
+  function fmt(n){ return '$'+Math.round(n).toLocaleString('es-AR'); }
+
+  function tarjeta(c, tipo){
+    const telNum = (c.tel||'').replace(/\D/g,'');
+    const telWA = telNum ? '549'+telNum : '';
+    const nombre1 = c.nombre.split(' ')[0];
+    let msg='', color='', bg='';
+    if(tipo==='hoy'){
+      bg='#fff8f0'; color='#b06000';
+      msg='Hola '+nombre1+', te recordamos que hoy vence tu cuota N'+String.fromCharCode(176)+c._q.num+' por *'+fmt(c._q.monto)+'* de tu credito en NICKCEL Tecno & Hogar. Cualquier consulta estamos a disposicion. Muchas gracias!';
+    } else if(tipo==='manana'){
+      bg='#fffbf0'; color='#b06000';
+      msg='Hola '+nombre1+', te avisamos que manana vence tu cuota N'+String.fromCharCode(176)+c._q.num+' por *'+fmt(c._q.monto)+'* de tu credito en NICKCEL Tecno & Hogar. Te esperamos para abonar a tiempo. Gracias!';
+    } else if(tipo==='pasado'){
+      bg='#f0f7ff'; color='#2e75b6';
+      msg='Hola '+nombre1+', te recordamos que en 2 dias vence tu cuota N'+String.fromCharCode(176)+c._q.num+' por *'+fmt(c._q.monto)+'* en NICKCEL Tecno & Hogar. Cualquier duda consulta con nosotros. Gracias!';
+    } else {
+      bg='#fff0f0'; color='#c00';
+      msg='Hola '+nombre1+', tenes '+c._cv+' cuota'+(c._cv>1?'s':'')+' vencida'+(c._cv>1?'s':'')+' por *'+fmt(c._mv)+'* ('+c._dias+' dias de mora) en NICKCEL Tecno & Hogar. Por favor regulariza tu situacion a la brevedad. Gracias!';
+    }
+    const cuotaInfo = tipo==='mora'
+      ? c._cv+' cuota'+(c._cv>1?'s':'')+' vencida'+(c._cv>1?'s':'')+' &mdash; '+fmt(c._mv)+' &mdash; '+c._dias+' dias'
+      : 'Cuota N&deg;'+c._q.num+' &mdash; '+fmt(c._q.monto)+' &mdash; Vence: '+c._q.fecha;
+    const cuotaColor = tipo==='mora' ? '#c00' : color;
+    const waBtn = telWA
+      ? '<a href="https://wa.me/'+telWA+'?text='+encodeURIComponent(msg)+'" target="_blank" style="padding:8px 16px;background:#25D366;color:#fff;border-radius:8px;font-size:13px;font-weight:700;text-decoration:none">&#128172; WhatsApp</a>'
+      : '<span style="font-size:12px;color:#999">Sin telefono</span>';
+    return '<div style="background:'+bg+';border:1px solid '+color+'44;border-radius:10px;padding:14px 16px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap">'
+      +'<div style="flex:1;min-width:200px">'
+      +'<div style="font-size:15px;font-weight:700;color:#1e3a5f">'+c.nombre+'</div>'
+      +'<div style="font-size:12px;color:#666;margin-top:2px">DNI: '+c.dni+' &nbsp;|&nbsp; Tel: '+(c.tel||'&mdash;')+' &nbsp;|&nbsp; Credito: '+c.ncredito+'</div>'
+      +'<div style="font-size:12px;color:'+cuotaColor+';margin-top:4px;font-weight:600">'+cuotaInfo+'</div>'
+      +'</div>'
+      +'<div>'+waBtn+'</div>'
+      +'</div>';
+  }
+
+  const empty='<div style="color:#aaa;font-size:13px;padding:12px 4px">Sin clientes en esta categoria &#10003;</div>';
+  document.getElementById('alertas-hoy').innerHTML    = g.hoy.length    ? g.hoy.map(c=>tarjeta(c,'hoy')).join('')    : empty;
+  document.getElementById('alertas-manana').innerHTML = g.manana.length ? g.manana.map(c=>tarjeta(c,'manana')).join(''): empty;
+  document.getElementById('alertas-pasado').innerHTML = g.pasado.length ? g.pasado.map(c=>tarjeta(c,'pasado')).join(''): empty;
+  document.getElementById('alertas-mora').innerHTML   = g.mora.length   ? g.mora.map(c=>tarjeta(c,'mora')).join('')   : empty;
 }
 
 // =========================================================
