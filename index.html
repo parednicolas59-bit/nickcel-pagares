@@ -157,7 +157,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#f0f2f5;color:#1a
 <div class="main-nav" id="main-nav">
   <button class="active" onclick="showScreen('pagare',this)">Nuevo Pagaré</button>
   <button onclick="showScreen('cartera',this)">Cartera de Clientes</button>
-  <button onclick="showScreen('alertas',this)">🔔 Alertas WhatsApp</button>
+  <button onclick="showScreen('alertas',this)" id="btn-alertas">🔔 Alertas WhatsApp <span id="alertas-badge" style="display:none;background:#ef4444;color:#fff;border-radius:20px;padding:1px 7px;font-size:11px;font-weight:700;margin-left:4px">0</span></button>
   <div style="margin-left:auto;display:flex;align-items:center;padding-right:14px;gap:10px">
     <span id="rol-indicator" style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;background:rgba(255,255,255,.15);color:#fff"></span>
     <button onclick="doLogout()" style="padding:5px 12px;border:1px solid rgba(255,255,255,.3);border-radius:6px;background:transparent;color:rgba(255,255,255,.8);font-size:11px;cursor:pointer;font-family:inherit">Salir</button>
@@ -483,6 +483,18 @@ window.renderAlertas = function(){
   document.getElementById('alertas-manana').innerHTML = g.manana.length ? g.manana.map(c=>tarjeta(c,'manana')).join(''): empty;
   document.getElementById('alertas-pasado').innerHTML = g.pasado.length ? g.pasado.map(c=>tarjeta(c,'pasado')).join(''): empty;
   document.getElementById('alertas-mora').innerHTML   = g.mora.length   ? g.mora.map(c=>tarjeta(c,'mora')).join('')   : empty;
+
+  // Actualizar badge en el boton de nav
+  const totalUrgente = g.hoy.length + g.mora.length;
+  const badge = document.getElementById('alertas-badge');
+  if(badge){
+    if(totalUrgente > 0){
+      badge.textContent = totalUrgente;
+      badge.style.display = 'inline';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
 }
 
 // =========================================================
@@ -492,7 +504,25 @@ async function cargarCartera(){
   const snap = await getDocs(query(collection(db,'creditos'), orderBy('fechaEmision','desc')));
   carteraCache = [];
   snap.forEach(d => carteraCache.push({...d.data(), _id: d.id}));
+  actualizarBadgeAlertas();
   return carteraCache;
+}
+
+async function actualizarBadgeAlertas(){
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  if(!carteraCache.length) return;
+  let urgente = 0;
+  carteraCache.forEach(c=>{
+    if(estadoCredito(c)==='pagado') return;
+    const tieneHoy = c.cuotas.some(q=>!q.pagada && (()=>{const fv=new Date(q.fechaISO);return fv.getFullYear()===hoy.getFullYear()&&fv.getMonth()===hoy.getMonth()&&fv.getDate()===hoy.getDate();})());
+    const enMora = estadoCredito(c)==='mora';
+    if(tieneHoy||enMora) urgente++;
+  });
+  const badge = document.getElementById('alertas-badge');
+  if(badge){
+    if(urgente>0){ badge.textContent=urgente; badge.style.display='inline'; }
+    else { badge.style.display='none'; }
+  }
 }
 
 async function cargarYRenderCartera(filtro){
