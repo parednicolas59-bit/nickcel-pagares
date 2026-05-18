@@ -984,13 +984,28 @@ window.renderDashboard = function() {
   const creditosActivos= cache.filter(c=>{ const cp=c.cuotas.filter(q=>!q.pagada); return cp.length>0; }).length;
   const enMora         = cache.filter(c=>{ const v=c.cuotas.filter(q=>!q.pagada&&new Date(q.fechaISO)<hoy); return v.length>0; }).length;
 
+  // Inversión precio contado por mes (créditos emitidos ese mes)
+  const mapaContado = {};
+  cache.forEach(c => {
+    if(!c.fechaEmision) return;
+    let iso = c.fechaEmision;
+    if(iso.includes('/')) { const [d,m,y]=iso.split('/'); iso=`${y}-${m}-${d}`; }
+    const mm = iso.substring(0,7);
+    if(!mapaContado[mm]) mapaContado[mm] = 0;
+    mapaContado[mm] += c.contado || c.monto || 0;
+  });
+  const contadoMesActual = mapaContado[mesHoy] || 0;
+  const contadoTotal = Object.values(mapaContado).reduce((s,v)=>s+v, 0);
+
   dash_kpis.innerHTML = [
-    { label:'Créditos activos',     val: creditosActivos,          color:'#1e3a5f', bg:'#f0f4ff', ico:'👥' },
-    { label:'En mora',              val: enMora,                   color:'#c00',    bg:'#fff0f0', ico:'⚠️' },
-    { label:'Cobrado total',        val: fmt(totalCobrado),        color:'#15803d', bg:'#f0faf5', ico:'✅' },
-    { label:'Saldo pendiente total',val: fmt(totalCartera),        color:'#b45309', bg:'#fffbf0', ico:'⏳' },
-    { label:'Este mes — esperado',  val: fmt(mesActualData.total), color:'#1e3a5f', bg:'#f0f4ff', ico:'📅' },
-    { label:'Este mes — cobrado',   val: fmt(mesActualData.cobrado),color:'#15803d',bg:'#f0faf5', ico:'💰' },
+    { label:'Créditos activos',          val: creditosActivos,           color:'#1e3a5f', bg:'#f0f4ff', ico:'👥' },
+    { label:'En mora',                   val: enMora,                    color:'#c00',    bg:'#fff0f0', ico:'⚠️' },
+    { label:'Cobrado total',             val: fmt(totalCobrado),         color:'#15803d', bg:'#f0faf5', ico:'✅' },
+    { label:'Saldo pendiente total',     val: fmt(totalCartera),         color:'#b45309', bg:'#fffbf0', ico:'⏳' },
+    { label:'Este mes — esperado',       val: fmt(mesActualData.total),  color:'#1e3a5f', bg:'#f0f4ff', ico:'📅' },
+    { label:'Este mes — cobrado',        val: fmt(mesActualData.cobrado),color:'#15803d', bg:'#f0faf5', ico:'💰' },
+    { label:'Inversión este mes (contado)', val: fmt(contadoMesActual),  color:'#7c3aed', bg:'#f5f3ff', ico:'🏷️' },
+    { label:'Inversión total (contado)',    val: fmt(contadoTotal),      color:'#7c3aed', bg:'#ede9fe', ico:'📦' },
   ].map(k=>`<div style="background:${k.bg};border-radius:10px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.06)">
     <div style="font-size:18px;margin-bottom:4px">${k.ico}</div>
     <div style="font-size:11px;color:#888;margin-bottom:4px">${k.label}</div>
@@ -1004,6 +1019,7 @@ window.renderDashboard = function() {
       <th style="padding:10px 14px;text-align:right;font-size:11px;color:#888;font-weight:600;border-bottom:1px solid #eee">TOTAL ESPERADO</th>
       <th style="padding:10px 14px;text-align:right;font-size:11px;color:#888;font-weight:600;border-bottom:1px solid #eee">COBRADO</th>
       <th style="padding:10px 14px;text-align:right;font-size:11px;color:#888;font-weight:600;border-bottom:1px solid #eee">SALDO</th>
+      <th style="padding:10px 14px;text-align:right;font-size:11px;color:#7c3aed;font-weight:600;border-bottom:1px solid #eee">INV. CONTADO</th>
       <th style="padding:10px 14px;text-align:center;font-size:11px;color:#888;font-weight:600;border-bottom:1px solid #eee">ESTADO</th>
     </tr></thead>
     <tbody>${meses.map(mm=>{
@@ -1039,6 +1055,7 @@ window.renderDashboard = function() {
         <td style="padding:10px 14px;text-align:right;font-weight:600;color:#1e3a5f">${fmt(d.total)}</td>
         <td style="padding:10px 14px;text-align:right;color:#15803d;font-weight:600">${fmt(d.cobrado)}</td>
         <td style="padding:10px 14px;text-align:right;font-weight:700;color:${saldoColor}">${fmt(saldo)}</td>
+        <td style="padding:10px 14px;text-align:right;font-weight:600;color:#7c3aed">${fmt(mapaContado[mm]||0)}</td>
         <td style="padding:10px 14px;text-align:center">${estadoBadge}</td>
       </tr>`;
     }).join('')}
@@ -1047,6 +1064,7 @@ window.renderDashboard = function() {
       <td style="padding:10px 14px;text-align:right;font-weight:700;color:#1e3a5f">${fmt(meses.reduce((s,mm)=>s+(mapa[mm]?.total||0),0))}</td>
       <td style="padding:10px 14px;text-align:right;font-weight:700;color:#15803d">${fmt(meses.reduce((s,mm)=>s+(mapa[mm]?.cobrado||0),0))}</td>
       <td style="padding:10px 14px;text-align:right;font-weight:700;color:#b45309">${fmt(meses.reduce((s,mm)=>s+Math.max(0,(mapa[mm]?.total||0)-(mapa[mm]?.cobrado||0)),0))}</td>
+      <td style="padding:10px 14px;text-align:right;font-weight:700;color:#7c3aed">${fmt(meses.reduce((s,mm)=>s+(mapaContado[mm]||0),0))}</td>
       <td></td>
     </tr>
     </tbody></table>`;
