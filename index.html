@@ -149,10 +149,35 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#f0f2f5;color:#1a
 <div class="main-nav" id="main-nav">
   <button class="active" onclick="showScreen('pagare',this)">Nuevo Pagaré</button>
   <button onclick="showScreen('cartera',this)">Cartera de Clientes</button>
+  <button onclick="showScreen('dashboard',this)" id="btn-dashboard">📈 Dashboard</button>
   <button onclick="showScreen('alertas',this)" id="btn-alertas">🔔 Alertas WhatsApp <span id="alertas-badge" style="display:none;background:#ef4444;color:#fff;border-radius:20px;padding:1px 7px;font-size:11px;font-weight:700;margin-left:4px">0</span></button>
   <div style="margin-left:auto;display:flex;align-items:center;padding-right:14px;gap:10px">
     <span id="rol-indicator" style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;background:rgba(255,255,255,.15);color:#fff"></span>
     <button onclick="doLogout()" style="padding:5px 12px;border:1px solid rgba(255,255,255,.3);border-radius:6px;background:transparent;color:rgba(255,255,255,.8);font-size:11px;cursor:pointer;font-family:inherit">Salir</button>
+  </div>
+</div>
+
+<div id="screen-dashboard" class="screen">
+  <div style="max-width:1100px;margin:0 auto">
+    <div style="background:#1e3a5f;border-radius:12px;padding:18px 22px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+      <div>
+        <div style="font-size:18px;font-weight:700;color:#fff">📈 Dashboard — Proyección de cobranza</div>
+        <div style="font-size:12px;color:rgba(255,255,255,.6);margin-top:3px">Total a cobrar mes a mes según todos los créditos activos</div>
+      </div>
+      <button onclick="renderDashboard()" style="padding:8px 16px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:8px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">↺ Actualizar</button>
+    </div>
+    <!-- KPIs globales -->
+    <div id="dash-kpis" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-bottom:18px"></div>
+    <!-- Tabla mes a mes -->
+    <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden;margin-bottom:18px">
+      <div style="background:#1e3a5f;color:#fff;padding:12px 18px;font-size:13px;font-weight:700">📅 Detalle mes a mes</div>
+      <div id="dash-tabla" style="padding:0"></div>
+    </div>
+    <!-- Barras visuales -->
+    <div style="background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden;margin-bottom:18px">
+      <div style="background:#1e3a5f;color:#fff;padding:12px 18px;font-size:13px;font-weight:700">📊 Proporción cobrado vs pendiente</div>
+      <div id="dash-barras" style="padding:16px 20px"></div>
+    </div>
   </div>
 </div>
 
@@ -866,6 +891,9 @@ function calcularResumenMes(offset) {
 }
 
 function renderResumenMes() {
+  if(window._ocultarPanalesAdmin) return;
+  const rm = document.getElementById('resumen-mensual');
+  if(rm) rm.style.display = '';
   const r = calcularResumenMes(_mesCursor);
   const fmt = n => '$'+Math.round(n).toLocaleString('es-AR');
   document.getElementById('resumen-mes-label').textContent = r.label.charAt(0).toUpperCase()+r.label.slice(1);
@@ -893,6 +921,165 @@ const _origShowScreen = window.showScreen;
 window.showScreen = function(s, btn) {
   _origShowScreen(s, btn);
   if(s==='cartera') setTimeout(()=>{ renderResumenMes(); renderCalendarioCobranza(); }, 300);
+  if(s==='dashboard') {
+    if(window._ocultarPanalesAdmin) return;
+    setTimeout(renderDashboard, 300);
+  }
+}
+
+// ============================================
+// DASHBOARD GLOBAL DE COBRANZA
+// ============================================
+window.renderDashboard = function() {
+  const dash_kpis   = document.getElementById('dash-kpis');
+  const dash_tabla  = document.getElementById('dash-tabla');
+  const dash_barras = document.getElementById('dash-barras');
+  if(!dash_kpis) return;
+
+  const cache = window._carteraCache || [];
+  if(!cache.length) {
+    // intentar cargar primero
+    dash_kpis.innerHTML = '<div style="color:#999;padding:20px">Cargando datos...</div>';
+    cargarYRenderCartera('todos').then(renderDashboard);
+    return;
+  }
+
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const mesHoy = hoy.toISOString().substring(0,7);
+  const fmt = n => '$'+Math.round(n).toLocaleString('es-AR');
+
+  // Construir mapa mensual
+  const mapa = {};
+  cache.forEach(c => {
+    c.cuotas.forEach(q => {
+      if(!q.fechaISO) return;
+      const mm = q.fechaISO.substring(0,7);
+      if(!mapa[mm]) mapa[mm] = { total:0, cobrado:0, pendientes:0, vencidas:0, cuotas:[] };
+      mapa[mm].total += q.monto;
+      if(q.pagada) { mapa[mm].cobrado += q.monto; }
+      else {
+        mapa[mm].pendientes++;
+        if(new Date(q.fechaISO) < hoy) mapa[mm].vencidas++;
+      }
+      mapa[mm].cuotas.push(q);
+    });
+  });
+
+  // Rango: 3 meses atrás hasta 12 adelante
+  const claves = new Set(Object.keys(mapa));
+  for(let i=-3; i<=12; i++){
+    const d=new Date(hoy); d.setDate(1); d.setMonth(d.getMonth()+i);
+    claves.add(d.toISOString().substring(0,7));
+  }
+  const meses = [...claves].sort().filter(k=>{
+    const hace3=new Date(hoy); hace3.setDate(1); hace3.setMonth(hace3.getMonth()-3);
+    return k >= hace3.toISOString().substring(0,7);
+  });
+
+  // KPIs globales
+  const totalCartera   = cache.reduce((s,c)=>s+c.cuotas.filter(q=>!q.pagada).reduce((ss,q)=>ss+q.monto,0),0);
+  const totalCobrado   = cache.reduce((s,c)=>s+c.cuotas.filter(q=>q.pagada).reduce((ss,q)=>ss+q.monto,0),0);
+  const totalGeneral   = totalCartera + totalCobrado;
+  const mesActualData  = mapa[mesHoy] || {total:0,cobrado:0,pendientes:0,vencidas:0};
+  const creditosActivos= cache.filter(c=>{ const cp=c.cuotas.filter(q=>!q.pagada); return cp.length>0; }).length;
+  const enMora         = cache.filter(c=>{ const v=c.cuotas.filter(q=>!q.pagada&&new Date(q.fechaISO)<hoy); return v.length>0; }).length;
+
+  dash_kpis.innerHTML = [
+    { label:'Créditos activos',     val: creditosActivos,          color:'#1e3a5f', bg:'#f0f4ff', ico:'👥' },
+    { label:'En mora',              val: enMora,                   color:'#c00',    bg:'#fff0f0', ico:'⚠️' },
+    { label:'Cobrado total',        val: fmt(totalCobrado),        color:'#15803d', bg:'#f0faf5', ico:'✅' },
+    { label:'Saldo pendiente total',val: fmt(totalCartera),        color:'#b45309', bg:'#fffbf0', ico:'⏳' },
+    { label:'Este mes — esperado',  val: fmt(mesActualData.total), color:'#1e3a5f', bg:'#f0f4ff', ico:'📅' },
+    { label:'Este mes — cobrado',   val: fmt(mesActualData.cobrado),color:'#15803d',bg:'#f0faf5', ico:'💰' },
+  ].map(k=>`<div style="background:${k.bg};border-radius:10px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+    <div style="font-size:18px;margin-bottom:4px">${k.ico}</div>
+    <div style="font-size:11px;color:#888;margin-bottom:4px">${k.label}</div>
+    <div style="font-size:20px;font-weight:700;color:${k.color}">${k.val}</div>
+  </div>`).join('');
+
+  // Tabla mes a mes
+  dash_tabla.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:#f5f7fa">
+      <th style="padding:10px 14px;text-align:left;font-size:11px;color:#888;font-weight:600;border-bottom:1px solid #eee">MES</th>
+      <th style="padding:10px 14px;text-align:right;font-size:11px;color:#888;font-weight:600;border-bottom:1px solid #eee">TOTAL ESPERADO</th>
+      <th style="padding:10px 14px;text-align:right;font-size:11px;color:#888;font-weight:600;border-bottom:1px solid #eee">COBRADO</th>
+      <th style="padding:10px 14px;text-align:right;font-size:11px;color:#888;font-weight:600;border-bottom:1px solid #eee">SALDO</th>
+      <th style="padding:10px 14px;text-align:center;font-size:11px;color:#888;font-weight:600;border-bottom:1px solid #eee">ESTADO</th>
+    </tr></thead>
+    <tbody>${meses.map(mm=>{
+      const d = mapa[mm] || {total:0,cobrado:0,pendientes:0,vencidas:0};
+      const saldo = d.total - d.cobrado;
+      const esActual = mm === mesHoy;
+      const [anio,mes] = mm.split('-');
+      const nombre = new Date(+anio,+mes-1,1).toLocaleString('es-AR',{month:'long',year:'numeric'});
+      const label = nombre.charAt(0).toUpperCase()+nombre.slice(1);
+
+      let estadoBadge, rowBg, saldoColor;
+      if(saldo <= 0) {
+        estadoBadge = `<span style="background:#dcfce7;color:#15803d;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700">✓ COBRADO</span>`;
+        rowBg = esActual?'#f0faf5':'#fff'; saldoColor='#15803d';
+      } else if(d.vencidas >= 2) {
+        estadoBadge = `<span style="background:#fee2e2;color:#c00;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700">⚠️ ${d.vencidas} VENCIDAS</span>`;
+        rowBg = esActual?'#fff5f5':'#fff'; saldoColor='#c00';
+      } else if(d.vencidas === 1 || (esActual && d.pendientes===1)) {
+        estadoBadge = `<span style="background:#fef9c3;color:#b45309;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700">${d.vencidas>0?'1 VENCIDA':'1 PENDIENTE'}</span>`;
+        rowBg = esActual?'#fffbf0':'#fff'; saldoColor='#b45309';
+      } else if(d.pendientes > 0) {
+        estadoBadge = `<span style="background:#dbeafe;color:#1e40af;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700">${d.pendientes} pendiente${d.pendientes>1?'s':''}</span>`;
+        rowBg = '#fff'; saldoColor='#1e40af';
+      } else {
+        estadoBadge = `<span style="color:#ccc;font-size:11px">—</span>`;
+        rowBg = '#fff'; saldoColor='#ccc';
+      }
+
+      return `<tr style="background:${rowBg};border-bottom:1px solid #f0f0f0">
+        <td style="padding:10px 14px;font-weight:${esActual?'700':'400'};color:#1e3a5f">
+          ${label}${esActual?' <span style="font-size:10px;background:#1e3a5f;color:#fff;padding:1px 7px;border-radius:20px">HOY</span>':''}
+        </td>
+        <td style="padding:10px 14px;text-align:right;font-weight:600;color:#1e3a5f">${fmt(d.total)}</td>
+        <td style="padding:10px 14px;text-align:right;color:#15803d;font-weight:600">${fmt(d.cobrado)}</td>
+        <td style="padding:10px 14px;text-align:right;font-weight:700;color:${saldoColor}">${fmt(saldo)}</td>
+        <td style="padding:10px 14px;text-align:center">${estadoBadge}</td>
+      </tr>`;
+    }).join('')}
+    <tr style="background:#f5f7fa;border-top:2px solid #1e3a5f">
+      <td style="padding:10px 14px;font-weight:700;color:#1e3a5f">TOTAL GENERAL</td>
+      <td style="padding:10px 14px;text-align:right;font-weight:700;color:#1e3a5f">${fmt(meses.reduce((s,mm)=>s+(mapa[mm]?.total||0),0))}</td>
+      <td style="padding:10px 14px;text-align:right;font-weight:700;color:#15803d">${fmt(meses.reduce((s,mm)=>s+(mapa[mm]?.cobrado||0),0))}</td>
+      <td style="padding:10px 14px;text-align:right;font-weight:700;color:#b45309">${fmt(meses.reduce((s,mm)=>s+Math.max(0,(mapa[mm]?.total||0)-(mapa[mm]?.cobrado||0)),0))}</td>
+      <td></td>
+    </tr>
+    </tbody></table>`;
+
+  // Barras visuales
+  dash_barras.innerHTML = meses.map(mm=>{
+    const d = mapa[mm] || {total:0,cobrado:0,pendientes:0,vencidas:0};
+    if(d.total===0) return '';
+    const saldo = d.total - d.cobrado;
+    const pctCobrado = Math.round(d.cobrado/d.total*100);
+    const [anio,mes] = mm.split('-');
+    const nombre = new Date(+anio,+mes-1,1).toLocaleString('es-AR',{month:'short'}).replace('.','');
+    const esActual = mm===mesHoy;
+    const fmt2 = n => '$'+Math.round(n/1000).toLocaleString('es-AR')+'k';
+
+    let barColor;
+    if(saldo<=0) barColor='#22c55e';
+    else if(d.vencidas>=2) barColor='#ef4444';
+    else if(d.vencidas===1||(esActual&&d.pendientes===1)) barColor='#f59e0b';
+    else barColor='#3b82f6';
+
+    return `<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+      <div style="min-width:60px;font-size:12px;font-weight:${esActual?'700':'400'};color:${esActual?'#1e3a5f':'#555'};text-align:right">${nombre.charAt(0).toUpperCase()+nombre.slice(1)}${esActual?'*':''}</div>
+      <div style="flex:1;background:#f0f0f0;border-radius:6px;height:22px;overflow:hidden;position:relative">
+        <div style="height:100%;width:${pctCobrado}%;background:${barColor};border-radius:6px;transition:width .3s"></div>
+        <div style="position:absolute;inset:0;display:flex;align-items:center;padding:0 8px;justify-content:space-between">
+          <span style="font-size:11px;font-weight:600;color:${pctCobrado>40?'#fff':'#333'}">${pctCobrado}% cobrado</span>
+          <span style="font-size:11px;color:#555">${fmt2(d.cobrado)} / ${fmt2(d.total)}</span>
+        </div>
+      </div>
+      <div style="min-width:80px;font-size:12px;font-weight:600;color:${saldo<=0?'#15803d':d.vencidas>=2?'#c00':'#b45309'};text-align:right">${saldo>0?'Saldo: '+fmt2(saldo):'✓'}</div>
+    </div>`;
+  }).join('') + `<div style="font-size:11px;color:#aaa;margin-top:8px">* Mes actual</div>`;
 }
 
 // ============================================
@@ -901,6 +1088,13 @@ window.showScreen = function(s, btn) {
 function renderCalendarioCobranza() {
   const grid = document.getElementById('cobranza-grid');
   if(!grid) return;
+  if(window._ocultarPanalesAdmin) {
+    const cal = document.getElementById('cobranza-calendario');
+    if(cal) cal.style.display = 'none';
+    return;
+  }
+  const cal = document.getElementById('cobranza-calendario');
+  if(cal) cal.style.display = '';
   const cache = window._carteraCache || [];
   const hoy = new Date(); hoy.setHours(0,0,0,0);
 
@@ -1013,6 +1207,11 @@ window.doLogin = function() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('main-app').style.display = 'block';
   document.getElementById('rol-indicator').textContent = window.rolActual === 'admin' ? '👑 Admin' : '👤 Vendedor';
+  // Mostrar/ocultar secciones exclusivas de admin
+  const esAdmin = window.rolActual === 'admin';
+  document.getElementById('btn-dashboard').style.display = esAdmin ? '' : 'none';
+  // Los paneles de cartera se ocultan cuando se renderizan (no existen aún en DOM aquí)
+  window._ocultarPanalesAdmin = !esAdmin;
 }
 
 window.doLogout = function() {
