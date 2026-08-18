@@ -122,6 +122,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#f0f2f5;color:#1a
 .btn-pagar-mora{padding:3px 10px;border:none;border-radius:5px;background:#c00;color:#fff;font-size:11px;cursor:pointer;font-family:inherit}
 .btn-pagar-mora:hover{background:#a00}
 .empty-state{text-align:center;padding:40px;color:#999;font-size:14px}
+.err-banner{background:#fff3cd;border:1px solid #ffe08a;color:#8a6400;padding:8px 12px;border-radius:6px;font-size:11px;margin-bottom:8px}
 </style>
 </head>
 <body>
@@ -263,6 +264,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#f0f2f5;color:#1a
       <button onclick="filtrarCartera('pagado')" id="f-pagado" style="padding:6px 14px;border:1px solid #ccc;border-radius:20px;background:#fff;color:#555;font-size:12px;cursor:pointer;font-family:inherit">Cancelados</button>
     </div>
   </div>
+  <div id="cartera-errores"></div>
   <div id="cartera-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px"></div>
   <div id="cartera-lista"></div>
 </div>
@@ -307,6 +309,17 @@ let busquedaActual = '';
 let moraState = null;
 
 // =========================================================
+// FECHA DE HOY EN FORMATO YYYY-MM-DD (LOCAL, SIN UTC)
+// =========================================================
+function hoyISO(){
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+
+// =========================================================
 // CALCULAR INTERÉS MORATORIO
 // tasaMensual en decimal (ej: 0.1284)
 // diasMoraNum: días de atraso
@@ -319,11 +332,16 @@ function calcularMora(montoCuota, tasaMensual, diasMoraNum) {
   return Math.round(interesMora);
 }
 
+// Compara strings "YYYY-MM-DD" directamente (evita bugs de timezone con new Date())
 function diasDeAtraso(fechaISO) {
-  const hoy = new Date(); hoy.setHours(0,0,0,0);
-  const venc = new Date(fechaISO); venc.setHours(0,0,0,0);
-  if (venc >= hoy) return 0;
-  return Math.floor((hoy - venc) / (1000*60*60*24));
+  if(!fechaISO) return 0;
+  const hoy = hoyISO();
+  if (fechaISO >= hoy) return 0;
+  const [ya,ma,da] = fechaISO.split('-').map(Number);
+  const [yh,mh,dh] = hoy.split('-').map(Number);
+  const vencUTC = Date.UTC(ya,ma-1,da);
+  const hoyUTC  = Date.UTC(yh,mh-1,dh);
+  return Math.floor((hoyUTC - vencUTC) / (1000*60*60*24));
 }
 
 // =========================================================
@@ -343,14 +361,26 @@ window.showScreen = function(s, btn){
 async function cargarCartera(){
   const snap = await getDocs(query(collection(db,'creditos'), orderBy('fechaEmision','desc')));
   carteraCache = [];
-  snap.forEach(d => carteraCache.push({...d.data(), _id: d.id}));
+  snap.forEach(d => {
+    const data = d.data();
+    // Protección: si un documento no tiene 'cuotas' (registro corrupto o cargado a mano),
+    // no rompe el render de toda la cartera.
+    if(!Array.isArray(data.cuotas)) data.cuotas = [];
+    carteraCache.push({...data, _id: d.id});
+  });
   return carteraCache;
 }
 
 async function cargarYRenderCartera(filtro){
   document.getElementById('cartera-lista').innerHTML = '<div class="empty-state">Cargando...</div>';
-  await cargarCartera();
-  renderCartera(filtro||filtroActual);
+  document.getElementById('cartera-errores').innerHTML = '';
+  try{
+    await cargarCartera();
+    renderCartera(filtro||filtroActual);
+  }catch(e){
+    console.error('Error cargando cartera:', e);
+    document.getElementById('cartera-lista').innerHTML = '<div class="empty-state">Error al cargar la cartera. Revisá la consola (F12) o la conexión.</div>';
+  }
 }
 
 window.guardarCredito = async function(datos){
@@ -367,20 +397,19 @@ window.guardarCredito = async function(datos){
 // ESTADO CREDITO
 // =========================================================
 function estadoCredito(credito){
-  const hoy = new Date(); hoy.setHours(0,0,0,0);
-  const cuotasPendientes = credito.cuotas.filter(c=>!c.pagada);
+  const cuotas = Array.isArray(credito.cuotas) ? credito.cuotas : [];
+  const cuotasPendientes = cuotas.filter(c=>!c.pagada);
   if(cuotasPendientes.length===0) return 'pagado';
-  const vencidas = credito.cuotas.filter(c=>!c.pagada && new Date(c.fechaISO) < hoy);
+  const vencidas = cuotasPendientes.filter(c=>diasDeAtraso(c.fechaISO) > 0);
   if(vencidas.length>0) return 'mora';
   return 'activo';
 }
 
 function diasMoraCredito(credito){
-  const hoy = new Date(); hoy.setHours(0,0,0,0);
-  const vencidas = credito.cuotas.filter(c=>!c.pagada && new Date(c.fechaISO) < hoy);
+  const cuotas = Array.isArray(credito.cuotas) ? credito.cuotas : [];
+  const vencidas = cuotas.filter(c=>!c.pagada && diasDeAtraso(c.fechaISO) > 0);
   if(!vencidas.length) return 0;
-  const masVieja = vencidas.reduce((a,b)=>new Date(a.fechaISO)<new Date(b.fechaISO)?a:b);
-  return Math.floor((hoy-new Date(masVieja.fechaISO))/(1000*60*60*24));
+  return Math.max(...vencidas.map(c=>diasDeAtraso(c.fechaISO)));
 }
 
 // =========================================================
@@ -396,7 +425,7 @@ function renderCartera(filtro){
 
   const busq = busquedaActual.toLowerCase();
   let lista = carteraCache.filter(c=>{
-    const matchBusq = !busq || c.nombre.toLowerCase().includes(busq) || c.dni.includes(busq) || c.ncredito.toLowerCase().includes(busq);
+    const matchBusq = !busq || (c.nombre||'').toLowerCase().includes(busq) || (c.dni||'').includes(busq) || (c.ncredito||'').toLowerCase().includes(busq);
     const estado = estadoCredito(c);
     const matchFiltro = filtro==='todos' || estado===filtro;
     return matchBusq && matchFiltro;
@@ -410,7 +439,8 @@ function renderCartera(filtro){
   // Total deuda en mora incluyendo intereses
   const montoMora = carteraCache.filter(c=>estadoCredito(c)==='mora').reduce((a,c)=>{
     const tasa = (c.tasa||0)/100;
-    return a + c.cuotas.filter(q=>!q.pagada).reduce((s,q)=>{
+    const cuotas = Array.isArray(c.cuotas) ? c.cuotas : [];
+    return a + cuotas.filter(q=>!q.pagada).reduce((s,q)=>{
       const dias = diasDeAtraso(q.fechaISO);
       const mora = dias > 0 ? calcularMora(q.monto, tasa, dias) : 0;
       return s + q.monto + mora;
@@ -444,8 +474,9 @@ function renderCartera(filtro){
   lista_html.innerHTML = lista.map((c)=>{
     const estado = estadoCredito(c);
     const mora = diasMoraCredito(c);
-    const cuotasPag = c.cuotas.filter(q=>q.pagada).length;
-    const cuotasTot = c.cuotas.length;
+    const cuotasArr = Array.isArray(c.cuotas) ? c.cuotas : [];
+    const cuotasPag = cuotasArr.filter(q=>q.pagada).length;
+    const cuotasTot = cuotasArr.length;
     const tasa = (c.tasa||0)/100;
 
     const badge = estado==='mora'
@@ -454,11 +485,9 @@ function renderCartera(filtro){
       ? `<span class="badge-pagado">CANCELADO</span>`
       : `<span class="badge-ok">AL DÍA</span>`;
 
-    const cuotasHtml = c.cuotas.map((q,qi)=>{
-      const hoy = new Date(); hoy.setHours(0,0,0,0);
-      const fVenc = new Date(q.fechaISO);
+    const cuotasHtml = cuotasArr.map((q,qi)=>{
       const dias = diasDeAtraso(q.fechaISO);
-      const estaVencida = !q.pagada && fVenc < hoy;
+      const estaVencida = !q.pagada && dias > 0;
       let cls = q.pagada ? 'pagada' : estaVencida ? 'vencida' : 'pendiente';
 
       if(q.pagada){
@@ -510,10 +539,10 @@ function renderCartera(filtro){
         </div>
       </div>
       <div class="credito-row">
-        <span>Monto: <strong>$${Math.round(c.monto).toLocaleString('es-AR')}</strong></span>
+        <span>Monto: <strong>$${Math.round(c.monto||0).toLocaleString('es-AR')}</strong></span>
         <span>Cuotas: <strong>${cuotasPag}/${cuotasTot} pagadas</strong></span>
-        <span>Cuota: <strong>$${Math.round(c.cuotaMonto).toLocaleString('es-AR')}</strong></span>
-        <span>Fecha: <strong>${c.fechaEmision}</strong></span>
+        <span>Cuota: <strong>$${Math.round(c.cuotaMonto||0).toLocaleString('es-AR')}</strong></span>
+        <span>Fecha: <strong>${c.fechaEmision||'—'}</strong></span>
       </div>
       <div class="cuotas-estado" id="det-${c.ncredito}" style="display:none">${cuotasHtml}</div>
     </div>`;
