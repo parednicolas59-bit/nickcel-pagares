@@ -468,6 +468,20 @@ window.showScreen = function(s, btn){
   if(s==='alertas') cargarYRenderAlertas();
 }
 
+function htmlFamiliares(c){
+  const fams = [c.fam1, c.fam2].filter(f=>f && (f.nombre || f.tel));
+  if(!fams.length) return '<div style="font-size:11px;color:#aaa;padding:6px 0 0">Sin referencias familiares cargadas</div>';
+  const nombreCli = (c.nombre||'').split(' ')[0];
+  return '<div style="background:#f5f8fc;border-radius:6px;padding:8px 10px;margin-top:8px"><div style="font-size:10px;font-weight:700;color:#2e75b6;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Referencias familiares</div>' +
+    fams.map(f=>{
+      const num = (f.tel||'').replace(/\D/g,'').replace(/^0/,'');
+      const nom1 = (f.nombre||'').split(' ')[0];
+      const msg = 'Hola '+nom1+', nos comunicamos de NICKCEL Tecno & Hogar. Necesitamos contactar a '+nombreCli+'. ¿Podrías pedirle que se comunique con nosotros? Muchas gracias!';
+      const wa = num ? '<a href="https://wa.me/549'+num+'?text='+encodeURIComponent(msg)+'" target="_blank" style="padding:3px 10px;background:#25D366;color:#fff;border-radius:5px;font-size:11px;font-weight:700;text-decoration:none">&#128172; WhatsApp</a>' : '';
+      return '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px;margin-top:4px"><span><strong>'+(f.rel||'Familiar')+':</strong> '+(f.nombre||'—')+'</span><span>Tel: <strong>'+(f.tel||'—')+'</strong></span>'+wa+'</div>';
+    }).join('') + '</div>';
+}
+
 async function cargarYRenderAlertas(){
   ['hoy','manana','pasado','mora'].forEach(k=>{
     const el=document.getElementById('alertas-'+k);
@@ -515,7 +529,7 @@ window.renderAlertas = function(){
     const cuotaInfo = tipo==='mora' ? c._cv+' cuota'+(c._cv>1?'s':'')+' vencida'+(c._cv>1?'s':'')+' &mdash; '+fmt(c._mv)+' &mdash; '+c._dias+' dias' : 'Cuota N&deg;'+c._q.num+' &mdash; '+fmt(c._q.monto)+' &mdash; Vence: '+c._q.fecha;
     const cuotaColor = tipo==='mora' ? '#c00' : color;
     const waBtn = telWA ? '<a href="https://wa.me/'+telWA+'?text='+encodeURIComponent(msg)+'" target="_blank" style="padding:8px 16px;background:#25D366;color:#fff;border-radius:8px;font-size:13px;font-weight:700;text-decoration:none">&#128172; WhatsApp</a>' : '<span style="font-size:12px;color:#999">Sin telefono</span>';
-    return '<div style="background:'+bg+';border:1px solid '+color+'44;border-radius:10px;padding:14px 16px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><div style="font-size:15px;font-weight:700;color:#1e3a5f">'+c.nombre+'</div><div style="font-size:12px;color:#666;margin-top:2px">DNI: '+c.dni+' &nbsp;|&nbsp; Tel: '+(c.tel||'&mdash;')+' &nbsp;|&nbsp; Credito: '+c.ncredito+'</div><div style="font-size:12px;color:'+cuotaColor+';margin-top:4px;font-weight:600">'+cuotaInfo+'</div></div><div>'+waBtn+'</div></div>';
+    return '<div style="background:'+bg+';border:1px solid '+color+'44;border-radius:10px;padding:14px 16px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><div style="font-size:15px;font-weight:700;color:#1e3a5f">'+c.nombre+'</div><div style="font-size:12px;color:#666;margin-top:2px">DNI: '+c.dni+' &nbsp;|&nbsp; Tel: '+(c.tel||'&mdash;')+' &nbsp;|&nbsp; Credito: '+c.ncredito+'</div><div style="font-size:12px;color:'+cuotaColor+';margin-top:4px;font-weight:600">'+cuotaInfo+'</div>'+(tipo==='mora'?htmlFamiliares(c):'')+'</div><div>'+waBtn+'</div></div>';
   }
   const empty='<div style="color:#aaa;font-size:13px;padding:12px 4px">Sin clientes en esta categoria &#10003;</div>';
   document.getElementById('alertas-hoy').innerHTML    = g.hoy.length    ? g.hoy.map(c=>tarjeta(c,'hoy')).join('')    : empty;
@@ -717,6 +731,7 @@ function renderCartera(filtro){
         <span>Cuota: <strong>$${Math.round(c.cuotaMonto).toLocaleString('es-AR')}</strong></span>
         <span>Fecha: <strong>${c.fechaEmision}</strong></span>
       </div>
+      <div style="margin-bottom:10px">${htmlFamiliares(c)}</div>
       <div class="cuotas-estado" id="det-${c.ncredito}" style="display:none">${cuotasHtml}</div>
     </div>`;
   }).join('');
